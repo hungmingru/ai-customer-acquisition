@@ -1,0 +1,67 @@
+import re
+import subprocess
+import xml.etree.ElementTree as ET
+
+
+class PhoneController:
+    def __init__(self, serial: str = ""):
+        self.serial = serial
+
+    def adb(self, cmd: str) -> str:
+        full_cmd = ["adb"]
+        if self.serial:
+            full_cmd += ["-s", self.serial]
+        full_cmd += cmd.split()
+        result = subprocess.run(full_cmd, capture_output=True, text=True)
+        return result.stdout.strip()
+
+    def get_devices(self) -> list[str]:
+        out = self.adb("devices")
+        lines = out.splitlines()[1:]
+        devices = []
+        for line in lines:
+            if "\tdevice" in line:
+                devices.append(line.split("\t")[0])
+        return devices
+
+    def tap(self, x: int, y: int):
+        self.adb(f"shell input tap {x} {y}")
+
+    def swipe(self, x1: int, y1: int, x2: int, y2: int, duration: int = 300):
+        self.adb(f"shell input swipe {x1} {y1} {x2} {y2} {duration}")
+
+    def input_text(self, text: str):
+        safe_text = text.replace("'", "\\'")
+        self.adb(f"shell input text '{safe_text}'")
+
+    def dump_ui(self) -> str:
+        self.adb("shell uiautomator dump /sdcard/ui.xml")
+        return self.adb("shell cat /sdcard/ui.xml")
+
+    def parse_ui(self) -> list[dict]:
+        xml_data = self.dump_ui()
+        try:
+            root = ET.fromstring(xml_data)
+        except ET.ParseError:
+            return []
+
+        nodes = []
+        for node in root.iter("node"):
+            text = node.get("text", "")
+            desc = node.get("content-desc", "")
+            clickable = node.get("clickable") == "true"
+            if text or desc or clickable:
+                bounds = node.get("bounds", "")
+                match = re.search(r"\[(\d+),(\d+)\]\[(\d+),(\d+)\]", bounds)
+                if match:
+                    x1, y1, x2, y2 = [int(v) for v in match.groups()]
+                    cx = (x1 + x2) // 2
+                    cy = (y1 + y2) // 2
+                    nodes.append(
+                        {
+                            "text": text or desc,
+                            "clickable": clickable,
+                            "center": (cx, cy),
+                        }
+                    )
+        return nodes
